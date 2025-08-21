@@ -148,6 +148,29 @@ namespace PhilLibX.Mathematics
             return new Vector3(a.X / value, a.Y / value, a.Z / value);
         }
 
+
+        /// <summary>
+        /// Checks if the Vector3 is the same as the given Vector3
+        /// </summary>
+        /// <param name="left"></param>
+        /// <param name="right"></param>
+        /// <returns></returns>
+        public static bool operator ==(Vector3 left, Vector3 right)
+        {
+            return left.X == right.X && left.Y == right.Y && left.Z == right.Z;
+        }
+
+        /// <summary>
+        /// Checks if the Vector3 is not the same as the given Vector3
+        /// </summary>
+        /// <param name="left"></param>
+        /// <param name="right"></param>
+        /// <returns></returns>
+        public static bool operator !=(Vector3 left, Vector3 right)
+        {
+            return !(left == right);
+        }
+
         /// <summary>
         /// Normalizes the Vector
         /// </summary>

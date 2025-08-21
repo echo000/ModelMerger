@@ -29,6 +29,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text;
+using PhilLibX.Cryptography.Hash;
+using System.Runtime.InteropServices;
 
 namespace PhilLibX
 {
@@ -671,6 +674,7 @@ namespace PhilLibX
                 case ".obj": ToOBJ(path); return;
                 case ".semodel": ToSEModel(path); return;
                 case ".ascii": ToXNALaraASCII(path); return;
+                case ".cast": ToCast(path); return;
                 //case ".ma": ToMA(path); return;
                 //case ".fbx": ToFBX(path); return;
                 //case ".xmodel_export": ToXME(path); return;
@@ -1036,6 +1040,234 @@ namespace PhilLibX
 
                 writer.WriteLine();
             }
+        }
+
+        /// <summary>
+        /// Saves the model to an Cast
+        /// </summary>
+        /// <param name="path">Output Path</param>
+        internal void ToCast(string path)
+        {            
+            var CastRoot = new CastNode();
+            var BoneCount = Bones.Count;
+            var CastModel = CastRoot.AddNode(CastNodeID.Model);
+            var CastSkeleton = CastModel.AddNode(CastNodeID.Skeleton);
+
+            var BoneIndexType = BoneCount <= 0xFFFF ? BoneCount <= 0xFF ? CastPropertyId.Byte : CastPropertyId.Short : CastPropertyId.Integer32;
+
+            for (int i = 0; i < BoneCount; i++)
+            {
+                var bone = Bones[i];
+                var CastBone = CastSkeleton.AddNode(CastNodeID.Bone);
+
+                CastBone.SetProperty("n", bone.Name);
+                CastBone.SetProperty("p", CastPropertyId.Integer32, bone.ParentIndex);
+                CastBone.SetProperty("lr", CastPropertyId.Vector4, bone.LocalRotation);
+                CastBone.SetProperty("lp", CastPropertyId.Vector3, bone.LocalPosition);
+                CastBone.SetProperty("wr", CastPropertyId.Vector4, bone.GlobalRotation);
+                CastBone.SetProperty("wp", CastPropertyId.Vector3, bone.GlobalPosition);
+                CastBone.SetProperty("s", CastPropertyId.Vector3, bone.Scale);
+            }
+
+            var MaterialHashes = new List<ulong>();
+            foreach (var Material in Materials)
+            {
+                var MaterialNameHash = FNV1a.Calculate64(Material.Name);
+
+                var CastMaterial = CastModel.AddNode(CastNodeID.Material, MaterialNameHash);
+
+                CastMaterial.SetProperty("n", Material.Name);
+                CastMaterial.SetProperty("t", "pbr");
+
+                MaterialHashes.Add(CastMaterial.Hash);
+
+                // Process textures
+                ProcessTexture(Material, "DiffuseMap", "albedo", CastMaterial);
+                ProcessTexture(Material, "NormalMap", "normal", CastMaterial);
+                ProcessTexture(Material, "SpecularMap", "specular", CastMaterial);
+                ProcessTexture(Material, "GlossMap", "gloss", CastMaterial);
+            }
+
+            int MeshIndex = 0;
+            foreach (var submesh in Meshes)
+            {
+                var meshName = MeshIndex == 0 ? "CastMesh" : $"CastMesh{MeshIndex}";
+                var MeshNameHash = FNV1a.Calculate64(meshName);
+                MeshIndex++;
+
+                var CastMesh = CastModel.AddNode(CastNodeID.Mesh, MeshNameHash);
+                var VertexCount = submesh.Vertices.Count;
+                var FaceIndexType = VertexCount <= 0xFFFF ? VertexCount <= 0xFF ? CastPropertyId.Byte : CastPropertyId.Short : CastPropertyId.Integer32;
+                var MaxSkinInfluenceBuffer = 0;
+                byte MaterialCountBuffer = (byte)submesh.MaterialIndices.Count;
+
+                // Iterate to dynamically calculate max weight influence
+                for (int i = 0; i < submesh.Vertices.Count; i++)
+                {
+                    if (submesh.Vertices[i].Weights.Count > MaxSkinInfluenceBuffer)
+                        MaxSkinInfluenceBuffer = submesh.Vertices[i].Weights.Count;
+                }
+
+                var Positions = CastMesh.AddProperty("vp", CastPropertyId.Vector3, VertexCount * Marshal.SizeOf<Vector3>());
+                var Normals = CastMesh.AddProperty("vn", CastPropertyId.Vector3, VertexCount * Marshal.SizeOf<Vector3>());
+                var Colours = CastMesh.AddProperty("vc", CastPropertyId.Integer32, VertexCount * sizeof(int));
+                var Mats = CastMesh.AddProperty("m", CastPropertyId.Integer64, VertexCount * sizeof(long));
+                var FaceIndices = CastMesh.AddProperty("f", FaceIndexType, VertexCount * sizeof(int));
+                var BoneWeights = CastMesh.AddProperty("wv", CastPropertyId.Float, VertexCount * sizeof(int));
+                var BoneIndices = CastMesh.AddProperty("wb", BoneIndexType);
+                var UVLayer = CastMesh.AddProperty("u0", CastPropertyId.Vector2, VertexCount * sizeof(float) * 2);
+
+                CastMesh.SetProperty("mi", CastPropertyId.Byte, (byte)MaxSkinInfluenceBuffer);
+                CastMesh.SetProperty("ul", CastPropertyId.Byte, (byte)1);
+
+                foreach(var Vertex in submesh.Vertices)
+                {
+                    Positions.Write(Vertex.Position);
+                    Colours.Write(0xFFFFFFFF);
+                    Normals.Write(Vertex.Normal);
+                    UVLayer.Write(Vertex.UVs[0]);
+                    for (int i = 0; i < MaxSkinInfluenceBuffer; i++)
+                    {
+                        // Write IDs
+                        var WeightID = (i < Vertex.Weights.Count) ? Vertex.Weights[i].BoneIndex : 0;
+                        var WeightValue = (i < Vertex.Weights.Count) ? Vertex.Weights[i].Influence : 0.0f;
+
+                        switch (BoneIndexType)
+                        {
+                            case CastPropertyId.Byte:
+                                BoneIndices.Write((byte)WeightID);
+                                BoneWeights.Write(WeightValue); break;
+                            case CastPropertyId.Short:
+                                BoneIndices.Write((short)WeightID);
+                                BoneWeights.Write(WeightValue); break;
+                            case CastPropertyId.Integer32:
+                                BoneIndices.Write(WeightID);
+                                BoneWeights.Write(WeightValue); break;
+                        }
+                    }
+                }
+
+                foreach(var Face in submesh.Faces)
+                { 
+                    if (Face.Indices[0] == Face.Indices[1] || Face.Indices[1] == Face.Indices[2] || Face.Indices[2] == Face.Indices[0])
+                        continue;
+
+                    switch (FaceIndexType)
+                    {
+                        case CastPropertyId.Byte:
+                            FaceIndices.Write((byte)Face.Indices[0]);
+                            FaceIndices.Write((byte)Face.Indices[1]);
+                            FaceIndices.Write((byte)Face.Indices[2]);
+                            break;
+                        case CastPropertyId.Short:
+                            FaceIndices.Write((short)Face.Indices[0]);
+                            FaceIndices.Write((short)Face.Indices[1]);
+                            FaceIndices.Write((short)Face.Indices[2]);
+                            break;
+                        case CastPropertyId.Integer32:
+                            FaceIndices.Write(Face.Indices[0]);
+                            FaceIndices.Write(Face.Indices[1]);
+                            FaceIndices.Write(Face.Indices[2]);
+                            break;
+                    }
+                }
+
+                Mats.Write(MaterialHashes[submesh.MaterialIndices[0]]);
+
+                if (Shapes.Count > 0)
+                {
+                    var BlendMap = new Dictionary<int, CastNode>();
+                    for (int i = 0; i < submesh.Vertices.Count; i++)
+                    {
+                        var Vertex = submesh.Vertices[i];
+                        foreach(var BlendDeltaPosition in Vertex.Shapes)
+                        {
+                            if(BlendDeltaPosition.Delta != new Vector3(0,0,0))
+                            {
+                                if (!BlendMap.TryGetValue(BlendDeltaPosition.ShapeIndex, out var blend))
+                                {
+                                    blend = CastModel.AddNode(CastNodeID.BlendShape);
+                                    blend.SetProperty("n", Shapes[BlendDeltaPosition.ShapeIndex]);
+                                    blend.SetProperty("b", CastPropertyId.Integer64, MeshNameHash);
+                                    blend.SetProperty("ts", CastPropertyId.Float, 1.0f);
+                                    blend.AddProperty("vp", CastPropertyId.Vector3, Vertex.Shapes.Count * Marshal.SizeOf<Vector3>());
+                                    blend.AddProperty("vi", FaceIndexType, Vertex.Shapes.Count * sizeof(int));
+                                    BlendMap[BlendDeltaPosition.ShapeIndex] = blend;
+                                }
+                                var BlendPos = new Vector3(BlendDeltaPosition.Delta.X,
+                                    BlendDeltaPosition.Delta.Y,
+                                    BlendDeltaPosition.Delta.Z
+                                    );
+                                blend.Properties["vp"].Write(BlendPos);
+                                switch (FaceIndexType)
+                                {
+                                    case CastPropertyId.Byte: blend.Properties["vi"].Write((byte)i); break;
+                                    case CastPropertyId.Short: blend.Properties["vi"].Write((short)i); break;
+                                    case CastPropertyId.Integer32: blend.Properties["vi"].Write(i); break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            var dir = Path.GetDirectoryName(path);
+
+            if (!string.IsNullOrWhiteSpace(dir))
+                Directory.CreateDirectory(dir);
+            using (var writer = new BinaryWriter(File.Create(path)))
+            {
+                WriteCastFile(writer, CastRoot);
+            }
+        }
+
+        private static void WriteCastFile(BinaryWriter Writer, CastNode node)
+        {
+            Writer.Write(0x74736163);
+            Writer.Write(1);
+            Writer.Write(1);
+            Writer.Write(0);
+
+            WriteCastNode(Writer, node);
+        }
+
+        private static void WriteCastNode(BinaryWriter Writer, CastNode node)
+        {
+            Writer.Write((uint)node.Identifier);
+            Writer.Write((uint)node.Size());
+            Writer.Write(node.Hash);
+            Writer.Write((uint)node.Properties.Count);
+            Writer.Write((uint)node.Children.Count);
+
+            foreach (var prop in node.Properties)
+            {
+                WriteCastProperty(Writer, prop.Key, prop.Value);
+            }
+
+            foreach (var child in node.Children)
+            {
+                WriteCastNode(Writer, child);
+            }
+        }
+
+        private static void WriteCastProperty(BinaryWriter Writer, string name, CastProperty prop)
+        {
+            Writer.Write((ushort)prop.Identifier);
+            Writer.Write((ushort)name.Length);
+            Writer.Write((uint)prop.Elements);
+            Writer.Write(Encoding.UTF8.GetBytes(name), 0, name.Length);
+            if (prop.Elements > 0)
+            {
+                Writer.Write(prop.Buffer.ToArray(), 0, prop.Buffer.Count);
+            }
+        }
+
+        void ProcessTexture(Material material, string textureKey, string propertyKey, CastNode castMaterial)
+        {
+            var texture = material.GetImage(textureKey);
+            var castTexture = castMaterial.AddNode(CastNodeID.File, FNV1a.Calculate64(texture));
+            castTexture.SetProperty("p", texture);
+            castMaterial.SetProperty(propertyKey, CastPropertyId.Integer64, castTexture.Hash);
         }
     }
 }

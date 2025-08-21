@@ -31,6 +31,7 @@ using SELib;
 using PhilLibX;
 using PhilLibX.Mathematics;
 using System.Reflection;
+using System.Diagnostics;
 
 namespace ModelMerger
 {
@@ -128,12 +129,120 @@ namespace ModelMerger
             return model;
         }
 
+        private static Model LoadCastModel(string filePath)
+        {
+            var model = new Model(Path.GetFileNameWithoutExtension(filePath));
+            var CastFile = Cast.CastFile.Load(filePath);
+            var Model = CastFile.RootNodes[0].ChildrenOfType<Cast.Model>().FirstOrDefault();
+            var Skeleton = Model.Skeleton();
+            var BoneCount = (uint)Skeleton.ChildNodes.Count;
+            var Mats = Model.ChildrenOfType<Cast.Material>();
+
+            Printer.WriteLine("LOADER", string.Format("Loading {0}", Path.GetFileName(filePath)));
+
+            foreach (var blend in Model.BlendShapes())
+            {
+                model.Shapes.Add(blend.Name());
+            }
+
+            foreach (var bone in Skeleton.Bones())
+            {
+                var boneLocPos = bone.LocalPosition();
+                var boneLocRot = bone.LocalRotation();
+                var boneGlobalRot = bone.WorldRotation();
+                var boneGlobalPos = bone.WorldPosition();
+                model.Bones.Add(new Model.Bone(
+                    bone.Name(),
+                    bone.ParentIndex(),
+                    new Vector3(boneLocPos.X, boneLocPos.Y, boneLocPos.Z),
+                    new Quaternion(boneLocRot.X, boneLocRot.Y, boneLocRot.Z, boneLocRot.W),
+                    new Vector3(boneGlobalPos.X, boneGlobalPos.Y, boneGlobalPos.Z),
+                    new Quaternion(boneGlobalRot.X, boneGlobalRot.Y, boneGlobalRot.Z, boneGlobalRot.W)));
+            }
+
+            var ShapeIndex = 0;
+            foreach(var CastMesh in Model.Meshes())
+            {
+                var mesh = new Model.Mesh(CastMesh.VertexCount(), CastMesh.FaceCount());
+
+                var VertexBuffer = CastMesh.VertexPositionBuffer().ToArray();
+                var NormalBuffer = CastMesh.VertexNormalBuffer().ToArray();
+                var WeightBoneBuffer = CastMesh.VertexWeightBoneBuffer().ToArray();
+                var WeightValueBuffer = CastMesh.VertexWeightValueBuffer().ToArray();
+                var FaceBuffer = CastMesh.FaceBuffer().ToArray();
+                var UVBuffer = CastMesh.VertexUVLayerBuffer(0).ToArray();
+
+                mesh.MaterialIndices.Add(Mats.IndexOf(CastMesh.Material()));
+
+                var BlendsForMesh = Model.BlendShapes().FindAll(x => x.BaseShape() == CastMesh);
+
+                var BlendWeight = new Cast.Vector3[0];
+                var BlendIndices = new int[0];
+
+                for (int i = 0; i < CastMesh.VertexCount(); i++)
+                {
+                    var vert = new Model.Vertex(
+                        new Vector3(VertexBuffer[i].X, VertexBuffer[i].Y, VertexBuffer[i].Z),
+                        new Vector3(NormalBuffer[i].X, NormalBuffer[i].Y, NormalBuffer[i].Z));
+
+                    vert.UVs.Add(new Vector2(UVBuffer[i].X, UVBuffer[i].Y));
+                    int weightStartIndex = i * CastMesh.MaximumWeightInfluence();
+                    for (int j = 0; j < CastMesh.MaximumWeightInfluence(); j++)
+                    {
+                        var weight = new Model.Vertex.Weight(WeightBoneBuffer[weightStartIndex + j], WeightValueBuffer[weightStartIndex + j]);
+                        //Console.WriteLine($"{WeightBoneBuffer[weightStartIndex + j]} {WeightValueBuffer[weightStartIndex + j]}");
+                        vert.Weights.Add(weight);
+                    }
+                    vert.Color = new Vector4(1, 1, 1, 1);
+
+                    mesh.Vertices.Add(vert);
+                }
+
+                if (BlendsForMesh.Count > 0)
+                {
+                    foreach (var BlendForMesh in BlendsForMesh)
+                    {
+                        BlendWeight = BlendForMesh.TargetShapeVertexPositions().ToArray();
+                        BlendIndices = BlendForMesh.TargetShapeVertexIndices().ToArray();
+
+                        for (int i = 0; i < BlendIndices.Length; i++)
+                        {
+                            var index = model.Shapes.IndexOf(BlendForMesh.Name());
+                            var currentVertex = mesh.Vertices[BlendIndices[i]];
+                            var DeltaVector = new Vector3(currentVertex.Position.X - BlendWeight[i].X, currentVertex.Position.Y - BlendWeight[i].Y, currentVertex.Position.Z - BlendWeight[i].Z);
+                            currentVertex.Shapes.Add(new Model.Vertex.Shape(index, new Vector3(BlendWeight[i].X, BlendWeight[i].Y, BlendWeight[i].Z)));
+                        }
+                    }
+                }
+
+                for (var i = 0; i < FaceBuffer.Count(); i+=3)
+                {
+                    mesh.Faces.Add(new Model.Face(FaceBuffer[i], FaceBuffer[i + 1], FaceBuffer[i + 2]));
+                }
+
+                model.Meshes.Add(mesh);
+                ShapeIndex++;
+            }
+
+            foreach (var material in Model.Materials())
+            {
+                var mat = new Model.Material(material.Name());
+                model.Materials.Add(mat);
+            }
+
+            Printer.WriteLine("LOADER", string.Format("Loaded {0}", model.Name));
+
+            return model;
+        }
+
         static Model LoadModel(string filePath)
         {
             switch(Path.GetExtension(filePath).ToLower())
             {
                 case ".semodel":
                     return LoadSEModel(filePath);
+                case ".cast":
+                        return LoadCastModel(filePath);
                 default:
                     return null;
             }
@@ -152,6 +261,9 @@ namespace ModelMerger
                 {
                     case ".semodel":
                         models.Add(LoadSEModel(fileName));
+                        break;
+                    case ".cast":
+                        models.Add(LoadCastModel(fileName));
                         break;
                     default:
                         Printer.WriteLine("ERROR", string.Format("Invalid file: ", Path.GetFileNameWithoutExtension(fileName)), ConsoleColor.Red);
@@ -201,7 +313,8 @@ namespace ModelMerger
         {
             Printer.WriteLine("INIT", "---------------------------");
             Printer.WriteLine("INIT", "ModelMerger by Scobalula");
-            Printer.WriteLine("INIT", "Merges SEModels into 1");
+            Printer.WriteLine("INIT", "Cast Support by echo000");
+            Printer.WriteLine("INIT", "Merges SEModels/Cast Models into 1");
             Printer.WriteLine("INIT", string.Format("Version {0}", Assembly.GetExecutingAssembly().GetName().Version));
             Printer.WriteLine("INIT", "---------------------------");
 
@@ -343,11 +456,11 @@ namespace ModelMerger
 
                     Printer.WriteLine("MERGER", string.Format("Saving {0}", rootModel.Name));
                     Directory.CreateDirectory(outputFolder);
-                    rootModel.Save(Path.Combine(outputFolder, rootModel.Name + ".semodel"));
+                    rootModel.Save(Path.Combine(outputFolder, rootModel.Name + ".cast"));
                     Printer.WriteLine("MERGER", string.Format("Saved {0}", rootModel.Name));
                 }
             }
-            catch(Exception e)
+            catch (Exception e)
             {
                 Printer.WriteLine("ERROR", "An unhandled exception has occured:", ConsoleColor.DarkRed);
                 Console.WriteLine(e);
