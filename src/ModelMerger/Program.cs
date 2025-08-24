@@ -340,7 +340,7 @@ namespace ModelMerger
                         rootModel
                     };
 
-                    var outputFolder = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "Merged Models");
+                    var outputFolder = Path.Combine(Path.GetDirectoryName(AppContext.BaseDirectory), "Merged Models");
 
                     // Keep looping until we've resolved all models
                     // We do this because some models connect to other
