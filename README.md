@@ -3,6 +3,7 @@
 A simple tool to merge models together, currently supports the following formats:
 
 * SEModel
+* Cast
 
 With other formats planned on request or by how many people use it.
 
