@@ -248,6 +248,7 @@ namespace ModelMerger
             }
         }
 
+        //TODO: Verify that the files are of the same type?
         static List<Model> LoadModels(string[] args)
         {
             var fileNames = args.ToList();
@@ -311,12 +312,20 @@ namespace ModelMerger
 
         static void Main(string[] args)
         {
+            var logger = new Logger("ModelMerger", Path.Combine(Path.GetDirectoryName(AppContext.BaseDirectory), "ModelMerger.log"));
             Printer.WriteLine("INIT", "---------------------------");
             Printer.WriteLine("INIT", "ModelMerger by Scobalula");
             Printer.WriteLine("INIT", "Cast Support by echo000");
             Printer.WriteLine("INIT", "Merges SEModels/Cast Models into 1");
             Printer.WriteLine("INIT", string.Format("Version {0}", Assembly.GetExecutingAssembly().GetName().Version));
             Printer.WriteLine("INIT", "---------------------------");
+
+            logger.Write("---------------------------", Logger.MessageType.INFO);
+            logger.Write("ModelMerger by Scobalula", Logger.MessageType.INFO);
+            logger.Write("Cast Support by echo000", Logger.MessageType.INFO);
+            logger.Write("Merges SEModels/Cast Models into 1", Logger.MessageType.INFO);
+            logger.Write(string.Format("Version {0}", Assembly.GetExecutingAssembly().GetName().Version), Logger.MessageType.INFO);
+            logger.Write("---------------------------", Logger.MessageType.INFO);
 
             try
             {
@@ -334,6 +343,7 @@ namespace ModelMerger
                         throw new Exception("Failed to obtain root model");
 
                     Printer.WriteLine("MERGER", string.Format("Using {0} as root model", rootModel.Name));
+                    logger.Write(string.Format("Using {0} as root model", rootModel.Name), Logger.MessageType.INFO);
 
                     var merged = new List<Model>(models.Count)
                     {
@@ -360,6 +370,7 @@ namespace ModelMerger
                             merged.Add(model);
 
                             Printer.WriteLine("MERGER", string.Format("Merging {0}", model.Name));
+                            logger.Write(string.Format("Merging {0}", model.Name), Logger.MessageType.INFO);
 
                             foreach (var bone in model.Bones)
                             {
@@ -451,23 +462,30 @@ namespace ModelMerger
                             }
 
                             Printer.WriteLine("MERGER", string.Format("Merged {0}", model.Name));
+                            logger.Write(string.Format("Merged {0}", model.Name), Logger.MessageType.INFO);
                         }
                     }
 
                     Printer.WriteLine("MERGER", string.Format("Saving {0}", rootModel.Name));
+                    logger.Write(string.Format("Saving {0}", rootModel.Name), Logger.MessageType.INFO);
                     Directory.CreateDirectory(outputFolder);
                     rootModel.Save(Path.Combine(outputFolder, rootModel.Name + ".cast"));
                     Printer.WriteLine("MERGER", string.Format("Saved {0}", rootModel.Name));
+                    logger.Write(string.Format("Saved {0}", rootModel.Name), Logger.MessageType.INFO);
                 }
             }
             catch (Exception e)
             {
+                logger.Write("An unhandled exception has occured:", Logger.MessageType.ERROR);
                 Printer.WriteLine("ERROR", "An unhandled exception has occured:", ConsoleColor.DarkRed);
+                logger.Write(e, Logger.MessageType.ERROR);
                 Console.WriteLine(e);
             }
 
 
             Printer.WriteLine("DONE", "Execution complete, press Enter to exit");
+            logger.Write("Execution complete, press Enter to exit", Logger.MessageType.INFO);
+            logger.Flush();
             Console.ReadLine();
         }
     }
